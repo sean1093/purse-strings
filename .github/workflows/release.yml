@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  # Releasing on demand, without waiting for a push: Actions tab, Release,
+  # Run workflow. Changesets publishes only versions absent from the registry,
+  # so a run with nothing to do is a no-op rather than a duplicate publish.
+  workflow_dispatch:
+
+# Releases must not race. Never cancel a run that may already be publishing.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# Read-only by default. The write scopes live on the job that needs them, so a
+# job added to this workflow later does not silently inherit the ability to push
+# to the repository while an npm publish token is in scope.
+permissions:
+  contents: read
+
+jobs:
+  # Nothing is published from a commit that has not passed the gates. CI runs on
+  # the same push, but nothing connected the two workflows, so a red build still
+  # published as long as `tsup` exited zero. These are the gates ci.yml's
+  # quality job runs, in the same order: a gate added there belongs here too.
+  #
+  # This job holds no secrets and checks out without credentials, which is also
+  # where the whole devDependency tree -- and its install scripts -- executes.
+  verify:
+    name: Verify the commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the release gates
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run check:docs
+          npm run test:coverage
+          npm run build
+          npm run check:examples
+          npm run check:exports
+          npm run size
+
+  release:
+    name: Version or publish
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit the version bump, push tags, create the GitHub release
+      pull-requests: write # open and update the "Version Packages" pull request
+      id-token: write # mint the OIDC token npm exchanges for a provenance attestation
+    steps:
+      # Changesets needs the full history to work out what has already shipped.
+      #
+      # Every action in this workflow is pinned to a commit, not a tag: this job
+      # holds a publish token, and a mutable tag lets upstream change what runs
+      # with it. Dependabot's github-actions updates keep the pins current.
+      #
+      # Credentials are persisted here, unlike in the verify job: changesets
+      # pushes the version commit and its tags over them.
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # registry-url writes the .npmrc that reads NODE_AUTH_TOKEN; without it
+      # the publish step authenticates as an anonymous user and is rejected.
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
+
+      # --ignore-scripts because this is the one job in the repository that holds
+      # a publish token and a push credential, and an install script is
+      # third-party code running beside them. Nothing here needs one: the
+      # toolchain is only used through its JavaScript API, and `npm run build`
+      # under this install is exercised by the verify job above.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      # `changeset publish` uploads whatever is on disk. Build first so the
+      # tarball carries real dist output rather than an empty directory.
+      - name: Build distributables
+        run: npm run build
+
+      # `changeset publish` fails with ENEEDAUTH when the registry token is
+      # absent, which reads as a broken pipeline rather than a missing one-time
+      # setup step. Check first, and warn rather than fail: an unconfigured
+      # repository should not paint every push to main red.
+      - name: Check for publish credentials
+        id: credentials
+        run: echo "ready=${{ secrets.NPM_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Explain a missing token
+        if: steps.credentials.outputs.ready != 'true'
+        run: |
+          echo "::warning title=Release skipped::NPM_TOKEN is not set, so nothing was published. Add an npm automation token as a repository secret named NPM_TOKEN (Settings, then Secrets and variables, then Actions), and re-run this workflow."
+
+      # With pending changesets this opens or refreshes the version pull
+      # request. With none, and the version already bumped, it runs the
+      # `release` script (`changeset publish`) and tags the commit.
+      #
+      # NPM_TOKEN must be an npm automation token: classic tokens and granular
+      # tokens with 2FA enforcement are rejected by unattended publishes.
+      # Provenance is requested by `publishConfig.provenance` in package.json,
+      # honoured by changesets, and is only accepted for a public repository
+      # publishing a public package from a supported CI provider.
+      #
+      # Pinned to a commit, not a tag: this step holds a publish token, and a
+      # mutable major tag lets upstream change what runs with it.
+      - name: Create version pull request or publish to npm
+        if: steps.credentials.outputs.ready == 'true'
+        uses: changesets/action@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
+        with:
+          # v2 renamed these from publish/title/commit.
+          publish-script: npm run release
+          pr-title: 'chore: version packages'
+          commit-message: 'chore: version packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
