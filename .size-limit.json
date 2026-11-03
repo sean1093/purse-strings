@@ -1,0 +1,8 @@
+[
+  {
+    "name": "purse-strings (ESM, gzipped)",
+    "path": "dist/index.js",
+    "limit": "5 kB",
+    "gzip": true
+  }
+]
