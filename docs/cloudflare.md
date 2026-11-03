@@ -46,7 +46,7 @@ With the binding declared in `wrangler.jsonc`:
 ```
 
 Nothing from `@cloudflare/workers-types` is imported. The binding is typed
-structurally, naming only `get`, `put` and `delete`, so the types
+structurally, naming only `get` and `put`, so the types
 `wrangler types` generates fit without this package depending on them.
 
 ### Options

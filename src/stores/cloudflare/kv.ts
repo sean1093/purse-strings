@@ -32,7 +32,6 @@ export interface KVPutOptions {
 export interface KVNamespaceLike {
   get(key: string): Promise<string | null>;
   put(key: string, value: string, options?: KVPutOptions): Promise<void>;
-  delete(key: string): Promise<void>;
 }
 
 export interface KVStoreOptions {
@@ -95,12 +94,9 @@ export class KVStore implements BudgetStore {
       namespace === null ||
       typeof namespace !== 'object' ||
       typeof namespace.get !== 'function' ||
-      typeof namespace.put !== 'function' ||
-      typeof namespace.delete !== 'function'
+      typeof namespace.put !== 'function'
     ) {
-      throw new InvalidConfigError(
-        'KVStore needs a KV namespace binding with get(), put() and delete()',
-      );
+      throw new InvalidConfigError('KVStore needs a KV namespace binding with get() and put()');
     }
 
     this.#kv = namespace;
@@ -298,7 +294,14 @@ function live(raw: string | null, now: number): Stored | null {
   if (parsed === null || typeof parsed !== 'object') return null;
   const stored = parsed as Partial<Stored>;
 
-  const expiresAt = typeof stored.e === 'number' && Number.isFinite(stored.e) ? stored.e : null;
+  // Every value this store writes carries `e`. One that does not is not ours,
+  // and adopting it would give the counter a window of `null`: a key that
+  // never rolls over, that KV never expires, and that refuses its subject
+  // permanently once it crosses a limit.
+  const expiresAt = stored.e;
+  if (expiresAt !== null && (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt))) {
+    return null;
+  }
   if (expiresAt !== null && expiresAt <= now) return null;
 
   return { t: numberOf(stored.t), c: numberOf(stored.c), r: numberOf(stored.r), e: expiresAt };

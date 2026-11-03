@@ -1,3 +1,4 @@
+import type { KVNamespace } from '@cloudflare/workers-types';
 import { Miniflare } from 'miniflare';
 import { afterAll, describe, expect, it } from 'vitest';
 import { InvalidConfigError, InvalidUsageError } from '../../src/errors.js';
@@ -39,9 +40,16 @@ runStoreContract('KVStore', (startedAt) => {
 });
 
 describe('KVStore', () => {
-  it('reports eventual consistency, so every rule on it is a soft limit', () => {
-    expect(new KVStore(namespace).consistency).toBe('eventual');
+  it('takes the binding wrangler generates and reports eventual consistency', () => {
+    // `tsc` is half the assertion: a real `KVNamespace` has to satisfy the
+    // structural type, or `new KVStore(env.BUDGETS)` would not compile in a
+    // Worker. The other half is the consistency it reports, which is what
+    // downgrades every rule on this store to a soft limit.
+    const binding = namespace as unknown as KVNamespace;
+
+    expect(new KVStore(binding).consistency).toBe('eventual');
   });
+
   it('pushes an expiration KV would refuse out to the floor it accepts', async () => {
     // A per-minute window that started in the past ends before KV's 60-second
     // floor, and KV refuses an expiration that close. The write has to land
@@ -65,19 +73,51 @@ describe('KVStore', () => {
     expect(await namespace.get(key)).not.toBeNull();
   });
 
-  it('propagates a write failure instead of reporting a booking it did not make', async () => {
-    const failing: KVNamespaceLike = {
-      get: () => Promise.resolve(null),
-      put: () => Promise.reject(new Error('KV put failed')),
-      delete: () => Promise.resolve(),
+  it('propagates a write failure, keeping the writes that already landed', async () => {
+    const written = new Map<string, string>();
+    const partial: KVNamespaceLike = {
+      get: (key) => Promise.resolve(written.get(key) ?? null),
+      put: (key, value) => {
+        if (key === 'b') return Promise.reject(new Error('KV put failed'));
+        written.set(key, value);
+        return Promise.resolve();
+      },
     };
-    const store = new KVStore(failing);
+    const store = new KVStore(partial);
+    const delta = { tokens: 1, costMicros: 1, requests: 1 };
 
     await expect(
       store.consume([
-        { key: 'k', delta: { tokens: 1, costMicros: 1, requests: 1 }, expiresAt: null },
+        { key: 'a', delta, expiresAt: null },
+        { key: 'b', delta, expiresAt: null },
       ]),
     ).rejects.toThrow('KV put failed');
+
+    // Over-counting is the safe side of a half-written batch: the guard
+    // refused the request, and the counter that did land stays booked.
+    expect(await store.read(['a', 'b'])).toEqual([
+      { tokens: 1, costMicros: 1, requests: 1 },
+      { tokens: 0, costMicros: 0, requests: 0 },
+    ]);
+  });
+
+  it('ignores a JSON value that is not one of its counters', async () => {
+    const key = `foreign-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const store = new KVStore(namespace, { now: () => Date.UTC(2026, 2, 1) });
+    await namespace.put(key, JSON.stringify({ someoneElses: 'value' }));
+
+    await store.consume([
+      {
+        key,
+        delta: { tokens: 3, costMicros: 0, requests: 1 },
+        expiresAt: Date.UTC(2026, 2, 2),
+      },
+    ]);
+
+    // Adopting the foreign object would have taken its absent expiry as "no
+    // window", leaving a key that never rolls over and that KV never deletes.
+    const stored = JSON.parse((await namespace.get(key)) as string) as { e: number | null };
+    expect(stored.e).toBe(Date.UTC(2026, 2, 2));
   });
 
   it('reads a value it did not write as zeros rather than as NaN', async () => {
