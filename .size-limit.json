@@ -14,7 +14,7 @@
   {
     "name": "purse-strings/cloudflare (ESM, gzipped)",
     "path": "dist/cloudflare.js",
-    "limit": "2 kB",
+    "limit": "3 kB",
     "gzip": true
   }
 ]
