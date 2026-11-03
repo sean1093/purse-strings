@@ -4,5 +4,11 @@
     "path": "dist/index.js",
     "limit": "7 kB",
     "gzip": true
+  },
+  {
+    "name": "purse-strings/firestore (ESM, gzipped)",
+    "path": "dist/firestore.js",
+    "limit": "2 kB",
+    "gzip": true
   }
 ]

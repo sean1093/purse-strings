@@ -15,6 +15,9 @@ in memory, Firestore or Cloudflare (Durable Objects or Workers KV).
 - [Threat model and design](https://github.com/sean1093/purse-strings/blob/main/docs/threat-model.md)
   — what the guard defends, what it guarantees under concurrency and failure,
   and where it stops.
+- [The Firestore store](https://github.com/sean1093/purse-strings/blob/main/docs/firestore.md)
+  — setup for Firebase and Google Cloud, the TTL policy on `expiresAt`, and
+  the write rate a single counter document sustains.
 - [Contributing](https://github.com/sean1093/purse-strings/blob/main/CONTRIBUTING.md)
   — scripts, project layout, how to add a store adapter, the quality gates and
   the release process.

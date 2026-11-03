@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: { index: 'src/index.ts' },
+  entry: { index: 'src/index.ts', firestore: 'src/firestore.ts' },
   format: ['esm', 'cjs'],
   target: 'es2022',
   outDir: 'dist',

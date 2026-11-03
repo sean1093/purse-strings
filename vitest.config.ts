@@ -5,10 +5,17 @@ import { defineConfig } from 'vitest/config';
 // a run under TZ=Pacific/Kiritimati is a test of that.
 export default defineConfig({
   test: {
-    include: ['test/**/*.test.ts'],
+    // Top level only. `test/integration/**` needs a backend the unit suite
+    // does not, and runs from vitest.integration.config.ts.
+    include: ['test/*.test.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
+      // The store adapters that need a backend are covered by the contract
+      // suite in vitest.integration.config.ts, which this run does not
+      // execute. Counting them here would measure the emulator job's work
+      // against a run that never loads the file.
+      exclude: ['src/firestore.ts', 'src/stores/firestore.ts'],
       reporter: ['text', 'lcov', 'html'],
       thresholds: {
         lines: 90,
