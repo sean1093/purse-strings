@@ -119,12 +119,25 @@ describe('usageFromAnthropic', () => {
     });
   });
 
-  it('takes output_tokens as the billed total, thinking included', () => {
-    // An extended-thinking response bills the thinking tokens inside
-    // `output_tokens`; there is no separate field to add.
-    const usage = { input_tokens: 100, output_tokens: 3_500 };
+  it('ignores the per-duration cache_creation breakdown, which is already summed', () => {
+    // An extended-thinking, cached request: `output_tokens` is the billed
+    // output total with thinking inside it, and `cache_creation` only breaks
+    // `cache_creation_input_tokens` down by duration. Adding the breakdown
+    // would count every cache write twice.
+    const usage = {
+      input_tokens: 100,
+      cache_creation_input_tokens: 2_000,
+      cache_read_input_tokens: 0,
+      cache_creation: { ephemeral_5m_input_tokens: 1_500, ephemeral_1h_input_tokens: 500 },
+      output_tokens: 3_500,
+    };
 
-    expect(usageFromAnthropic(usage).outputTokens).toBe(3_500);
+    expect(usageFromAnthropic(usage)).toEqual({
+      inputTokens: 2_100,
+      outputTokens: 3_500,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 2_000,
+    });
   });
 });
 
@@ -146,8 +159,6 @@ describe('usageFromGemini', () => {
       cachedInputTokens: 0,
       cacheWriteTokens: 0,
     });
-    // The four counters Gemini reports are disjoint and sum to its own total.
-    expect(usage.inputTokens + usage.outputTokens).toBe(metadata.totalTokenCount);
   });
 
   it('treats cachedContentTokenCount as part of promptTokenCount, not beside it', () => {
@@ -168,37 +179,33 @@ describe('usageFromGemini', () => {
 });
 
 describe('normalisation', () => {
-  it('reads a missing, null or nonsense counter as zero', () => {
-    const broken = {
-      prompt_tokens: Number.NaN,
-      completion_tokens: -40,
-      prompt_tokens_details: { cached_tokens: null, cache_write_tokens: Number.POSITIVE_INFINITY },
-    };
+  it('reads an absent counter as zero', () => {
+    const zero = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0 };
 
-    expect(usageFromOpenAI(broken)).toEqual({
-      inputTokens: 0,
-      outputTokens: 0,
-      cachedInputTokens: 0,
-      cacheWriteTokens: 0,
-    });
-    expect(usageFromAnthropic({})).toEqual({
-      inputTokens: 0,
-      outputTokens: 0,
-      cachedInputTokens: 0,
-      cacheWriteTokens: 0,
-    });
-    expect(usageFromGemini({})).toEqual({
-      inputTokens: 0,
-      outputTokens: 0,
-      cachedInputTokens: 0,
-      cacheWriteTokens: 0,
-    });
+    expect(usageFromOpenAI({ prompt_tokens: null, prompt_tokens_details: null })).toEqual(zero);
+    expect(usageFromAnthropic({})).toEqual(zero);
+    expect(usageFromGemini({})).toEqual(zero);
   });
 
-  it('keeps the cache subsets inside the input total', () => {
-    // `cachedInputTokens` and `cacheWriteTokens` are subsets of `inputTokens`,
-    // and the guard prices the remainder at the full input rate. Subsets that
-    // overflowed the whole would price a negative remainder.
+  it('refuses a counter that is present and not a token count', () => {
+    // A gateway that serialises counts as strings, or a proxy that emits
+    // NaN, would otherwise make the whole call cost the budget nothing.
+    expect(() => usageFromOpenAI({ prompt_tokens: Number.NaN })).toThrow(InvalidUsageError);
+    expect(() => usageFromOpenAI({ completion_tokens: -40 })).toThrow(InvalidUsageError);
+    expect(() => usageFromOpenAI({ prompt_tokens: '2006' as unknown as number })).toThrow(
+      InvalidUsageError,
+    );
+    expect(() => usageFromAnthropic({ cache_read_input_tokens: Number.POSITIVE_INFINITY })).toThrow(
+      InvalidUsageError,
+    );
+    expect(() => usageFromGemini({ thoughtsTokenCount: Number.NaN })).toThrow(InvalidUsageError);
+  });
+
+  it('grows the input total to hold cache subsets that contradict it', () => {
+    // `commit()` rejects a usage report whose subsets exceed `inputTokens`,
+    // which would leave the reservation booked for the rest of the window.
+    // Keeping both subsets and widening the whole can only over-charge;
+    // dropping the cache-write subset, the expensive one, would under-charge.
     const usage = usageFromOpenAI({
       prompt_tokens: 100,
       completion_tokens: 10,
@@ -206,10 +213,10 @@ describe('normalisation', () => {
     });
 
     expect(usage).toEqual({
-      inputTokens: 100,
+      inputTokens: 180,
       outputTokens: 10,
       cachedInputTokens: 90,
-      cacheWriteTokens: 10,
+      cacheWriteTokens: 90,
     });
   });
 

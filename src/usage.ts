@@ -12,24 +12,43 @@
  * `outputTokens` already including reasoning.
  *
  * No SDK is imported. Each parameter is a structural type naming only the
- * fields that are read, so the object from any client library fits — and the
- * fields that are not read are the ones already counted inside a total, such
- * as OpenAI's `reasoning_tokens` or Gemini's `cachedContentTokenCount`
- * beyond its own dimension.
+ * fields that are read, so the object from any client library fits. A field
+ * that is missing here is one already counted inside a total that is read,
+ * such as OpenAI's `reasoning_tokens` inside its output total. Gemini's
+ * `cachedContentTokenCount` is read, but as a subset of the prompt total
+ * rather than as something to add to it.
  */
 
 import { InvalidUsageError } from './errors.js';
 import type { TokenUsage } from './types.js';
 
-/** Non-negative whole tokens. Anything else a provider sends counts as none. */
+/**
+ * One provider counter.
+ *
+ * Absent is zero: providers omit a counter that does not apply, and a
+ * reservation that books nothing extra for it is right. Present and
+ * unusable is an error: a gateway that serialises counts as strings, or a
+ * proxy that emits `NaN`, would otherwise make a whole call cost the budget
+ * nothing, which is the hole this library exists to close. `commit()` draws
+ * the same line in `count()`.
+ */
 function tokens(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new InvalidUsageError(
+      `a provider reported ${String(value)} as a token count, which is not one`,
+    );
+  }
+  return Math.floor(value);
 }
 
 /**
- * The subsets cannot exceed the whole. A provider is not expected to violate
- * that, but a total that did would make every later `commit()` throw, which
- * would leave the reservation booked for the rest of the window.
+ * The subsets cannot exceed the whole: `commit()` rejects a usage report
+ * where they do, which would leave the reservation booked for the rest of
+ * the window. A provider is not expected to contradict itself, but if one
+ * does, the whole grows to hold its parts rather than a part being dropped.
+ * Both parts are kept because the cache-write price is the expensive one, so
+ * discarding it would resolve the contradiction by under-charging.
  */
 function normalise(
   inputTokens: number,
@@ -37,12 +56,11 @@ function normalise(
   cached: number,
   written: number,
 ): TokenUsage {
-  const cachedInputTokens = Math.min(cached, inputTokens);
   return {
-    inputTokens,
+    inputTokens: Math.max(inputTokens, cached + written),
     outputTokens,
-    cachedInputTokens,
-    cacheWriteTokens: Math.min(written, inputTokens - cachedInputTokens),
+    cachedInputTokens: cached,
+    cacheWriteTokens: written,
   };
 }
 
