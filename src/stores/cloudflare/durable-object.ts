@@ -12,16 +12,6 @@ const RECORD = 'counter';
  */
 const ENDPOINT = 'https://purse-strings.invalid/counter';
 
-/**
- * How far ahead an alarm is set at the earliest. workerd schedules alarms
- * against its own wall clock, not against the store's injectable one, so an
- * `expiresAt` in the platform's past would fire the moment it is set and
- * delete a counter that is still inside its window. The alarm is only
- * garbage collection — the stored `expiresAt` is the enforcement — so
- * pushing it out costs nothing.
- */
-const MIN_ALARM_DELAY_MS = 1_000;
-
 export interface DurableObjectStorageLike {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
@@ -155,8 +145,14 @@ export class BudgetCounterObject {
       r: next.requests,
       e: expiresAt,
     });
-    if (stored === null && expiresAt !== null) {
-      await this.#storage.setAlarm(Math.max(expiresAt, Date.now() + MIN_ALARM_DELAY_MS));
+    // workerd schedules alarms against its own wall clock, not against the
+    // store's injectable one. An expiry already behind the platform clock is
+    // left unscheduled rather than fired at once: the alarm is garbage
+    // collection, and deleting a counter that is still inside its window
+    // would restart it at zero and admit a whole limit's worth of extra
+    // traffic. On the default clock the condition always holds.
+    if (stored === null && expiresAt !== null && expiresAt > Date.now()) {
+      await this.#storage.setAlarm(expiresAt);
     }
 
     return reply({ ok: true, counter: next });
@@ -277,16 +273,23 @@ export class DurableObjectStore implements BudgetStore {
   async #compensate(booked: readonly CounterUpdate[], now: number): Promise<void> {
     for (let index = booked.length - 1; index >= 0; index -= 1) {
       const update = booked[index] as CounterUpdate;
-      await this.#call(update.key, {
-        op: 'add',
-        now,
-        delta: {
-          tokens: -update.delta.tokens,
-          costMicros: -update.delta.costMicros,
-          requests: -update.delta.requests,
-        },
-        expiresAt: update.expiresAt,
-      });
+      try {
+        await this.#call(update.key, {
+          op: 'add',
+          now,
+          delta: {
+            tokens: -update.delta.tokens,
+            costMicros: -update.delta.costMicros,
+            requests: -update.delta.requests,
+          },
+          expiresAt: update.expiresAt,
+        });
+      } catch {
+        // One object refusing its refund must not strand the rest. Leaving
+        // the whole batch booked because the newest give-back failed would
+        // over-count every counter instead of one, and it would turn a plain
+        // refusal into a store error the caller cannot act on.
+      }
     }
   }
 

@@ -52,7 +52,8 @@ const miniflare = new Miniflare({
   modules: true,
   compatibilityDate: '2026-01-01',
   script: bundle.outputFiles[0]?.text as string,
-  durableObjects: { COUNTERS: 'BudgetCounterObject' },
+  // The backend a new namespace has to use on Cloudflare today.
+  durableObjects: { COUNTERS: { className: 'BudgetCounterObject', useSQLite: true } },
 });
 
 const namespace = (await miniflare.getDurableObjectNamespace(

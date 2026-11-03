@@ -146,15 +146,16 @@ export default {
   "durable_objects": {
     "bindings": [{ "name": "BUDGET_COUNTERS", "class_name": "BudgetCounterObject" }]
   },
-  "migrations": [{ "tag": "v1", "new_classes": ["BudgetCounterObject"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BudgetCounterObject"] }]
 }
 ```
 
 `BudgetCounterObject` uses the fetch-handler form of the API —
 `constructor(state, env)`, `fetch(request)`, `alarm()` — and imports nothing
 from `cloudflare:workers`, so it works on any compatibility date that supports
-Durable Objects. It is a classic, key-value-backed object: the migration above
-is `new_classes`, not `new_sqlite_classes`.
+Durable Objects. It uses only the key-value storage API, which both object
+backends support, so the migration above is `new_sqlite_classes`: Cloudflare
+no longer lets a new namespace be created key-value-backed.
 
 ### Options
 
