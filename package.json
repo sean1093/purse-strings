@@ -131,7 +131,7 @@
     "miniflare": "^4.20260730.0",
     "publint": "^0.3.25",
     "size-limit": "^13.1.1",
-    "tsup": "^8.5.1",
+    "tsup": "^9.0.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12"
   }
