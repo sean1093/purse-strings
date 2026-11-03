@@ -40,9 +40,9 @@ loudly if `package.json` and the lockfile disagree, which is what CI does.
 |---|---|---|
 | `npm run build` | `tsup` | Produces `dist/` — ESM, CJS, and generated `.d.ts` — from the TypeScript sources. |
 | `npm run dev` | `tsup --watch` | Rebuilds `dist/` on save, for iterating against the built output. |
-| `npm test` | `vitest run --passWithNoTests` | Runs the suite once and exits. This is the command CI runs. The flag goes away with the first code pull request. |
+| `npm test` | `vitest run` | Runs the suite once and exits. This is the command CI runs. |
 | `npm run test:watch` | `vitest` | Same suite in watch mode while you edit. |
-| `npm run test:coverage` | `vitest run --coverage --passWithNoTests` | Runs the suite and fails if coverage drops below the thresholds below. |
+| `npm run test:coverage` | `vitest run --coverage` | Runs the suite and fails if coverage drops below the thresholds below. |
 | `npm run lint` | `biome check .` | Formatting and lint rules. Read-only; it reports, it does not rewrite. |
 | `npm run lint:fix` | `biome check --write .` | Applies every fix Biome can apply. Run this instead of arguing with `lint`. |
 | `npm run typecheck` | `tsc --noEmit` | Type errors across the whole project, including tests. |
