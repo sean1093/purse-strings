@@ -44,6 +44,7 @@ loudly if `package.json` and the lockfile disagree, which is what CI does.
 | `npm run test:watch` | `vitest` | Same suite in watch mode while you edit. |
 | `npm run test:coverage` | `vitest run --coverage` | Runs the suite and fails if coverage drops below the thresholds below. |
 | `npm run test:firestore` | `vitest run --config vitest.integration.config.ts test/integration/firestore.test.ts` | Runs the store contract suite against the Firestore emulator. It needs `FIRESTORE_EMULATOR_HOST`, so run it through `firebase emulators:exec` as [the Firestore guide](docs/firestore.md#running-the-tests) shows. |
+| `npm run test:cloudflare` | `vitest run --config vitest.integration.config.ts test/integration/cloudflare-kv.test.ts` | Runs the store contract suite against Miniflare. Needs no account and no network. |
 | `npm run lint` | `biome check .` | Formatting and lint rules. Read-only; it reports, it does not rewrite. |
 | `npm run lint:fix` | `biome check --write .` | Applies every fix Biome can apply. Run this instead of arguing with `lint`. |
 | `npm run typecheck` | `tsc --noEmit` | Type errors across the whole project, including tests. |

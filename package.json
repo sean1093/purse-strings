@@ -16,6 +16,9 @@
     "*": {
       "firestore": [
         "./dist/firestore.d.ts"
+      ],
+      "cloudflare": [
+        "./dist/cloudflare.d.ts"
       ]
     }
   },
@@ -40,6 +43,16 @@
         "default": "./dist/firestore.cjs"
       }
     },
+    "./cloudflare": {
+      "import": {
+        "types": "./dist/cloudflare.d.ts",
+        "default": "./dist/cloudflare.js"
+      },
+      "require": {
+        "types": "./dist/cloudflare.d.cts",
+        "default": "./dist/cloudflare.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -55,6 +68,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:firestore": "vitest run --config vitest.integration.config.ts test/integration/firestore.test.ts",
+    "test:cloudflare": "vitest run --config vitest.integration.config.ts test/integration/cloudflare-kv.test.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "tsc --noEmit",
@@ -107,10 +121,12 @@
     "@arethetypeswrong/cli": "^0.18.5",
     "@biomejs/biome": "^2.6.4",
     "@changesets/cli": "^3.0.3",
+    "@cloudflare/workers-types": "^5.20261103.1",
     "@google-cloud/firestore": "^9.4.0",
     "@size-limit/preset-small-lib": "^13.1.1",
     "@types/node": "^22.20.5",
     "@vitest/coverage-v8": "^4.1.12",
+    "miniflare": "^4.20260730.0",
     "publint": "^0.3.25",
     "size-limit": "^13.1.1",
     "tsup": "^8.5.1",
