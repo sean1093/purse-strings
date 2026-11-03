@@ -8,6 +8,9 @@
 /** The dimensions a rule can limit. Cost is always in integer micro-dollars. */
 export type BudgetDimension = 'tokens' | 'costMicros' | 'requests';
 
+/** The caps a single agent run keeps on itself, beside the guard's rules. */
+export type RunLimit = 'steps' | 'toolCalls' | 'duration' | 'tokens' | 'costMicros';
+
 export type PurseStringsErrorCode =
   /** A reservation would take a rule past one of its limits. */
   | 'BUDGET_EXCEEDED'
@@ -17,6 +20,10 @@ export type PurseStringsErrorCode =
   | 'MISSING_SUBJECT'
   /** The lease was already committed or released. */
   | 'LEASE_SETTLED'
+  /** A run reached one of its own caps. */
+  | 'RUN_LIMIT_EXCEEDED'
+  /** The same tool was called with the same arguments too many times in one run. */
+  | 'LOOP_DETECTED'
   /** The guard options are not usable. Thrown by `createGuard()`. */
   | 'INVALID_CONFIG'
   /** An argument to `reserve()` or `commit()` is not usable. */
@@ -126,6 +133,53 @@ export class LeaseSettledError extends PurseStringsError {
     );
     this.name = 'LeaseSettledError';
     this.settledAs = settledAs;
+  }
+}
+
+/**
+ * A run reached one of its own caps. Nothing is booked: the reservation that
+ * would have crossed the cap is refused before the store sees it, so the
+ * guard's counters are untouched.
+ *
+ * `actual` is what the run would have reached — elapsed milliseconds for
+ * `duration`, otherwise the count or amount including the refused call.
+ */
+export class RunLimitExceededError extends PurseStringsError {
+  readonly limit: RunLimit;
+  readonly max: number;
+  readonly actual: number;
+
+  constructor(limit: RunLimit, max: number, actual: number) {
+    super(
+      'RUN_LIMIT_EXCEEDED',
+      `this run is over its ${limit} limit: ${actual} exceeds the maximum of ${max}`,
+    );
+    this.name = 'RunLimitExceededError';
+    this.limit = limit;
+    this.max = max;
+    this.actual = actual;
+  }
+}
+
+/**
+ * The same tool was called with the same arguments too many times in one run:
+ * the signature of an agent that is not converging.
+ *
+ * `count` includes the refused call, which is not recorded. A caller that
+ * retries it sees the same count rather than one that keeps climbing.
+ */
+export class LoopDetectedError extends PurseStringsError {
+  readonly tool: string;
+  readonly count: number;
+
+  constructor(tool: string, count: number) {
+    super(
+      'LOOP_DETECTED',
+      `tool '${tool}' was called ${count} times with the same arguments in this run`,
+    );
+    this.name = 'LoopDetectedError';
+    this.tool = tool;
+    this.count = count;
   }
 }
 

@@ -9,6 +9,7 @@ import {
   UnknownModelError,
 } from './errors.js';
 import { counterKey, GLOBAL_SUBJECT, validateRuleId } from './keys.js';
+import { type Run, type RunHooks, type RunHost, type RunOptions, startRun } from './run.js';
 import type {
   BudgetRule,
   BudgetStore,
@@ -111,6 +112,11 @@ export interface Guard {
    * cannot absorb it, and nothing is booked.
    */
   reserve(options?: ReserveOptions): Promise<Lease>;
+  /**
+   * Start an agent run: step, tool-call, repetition and wall-clock caps on top
+   * of the budget rules, for one loop in this process.
+   */
+  startRun(options?: RunOptions): Run;
   /** Used, limit, remaining and reset time for every applicable rule. */
   usage(options?: UsageOptions): Promise<RuleUsage[]>;
   /** The rules as configured, in order. */
@@ -144,7 +150,7 @@ export function createGuard(options: GuardOptions): Guard {
   return new BudgetGuard(options);
 }
 
-class BudgetGuard implements Guard {
+class BudgetGuard implements Guard, RunHost {
   readonly rules: readonly BudgetRule[];
 
   readonly #store: BudgetStore;
@@ -183,7 +189,25 @@ class BudgetGuard implements Guard {
     }
   }
 
-  async reserve(options: ReserveOptions = {}): Promise<Lease> {
+  reserve(options: ReserveOptions = {}): Promise<Lease> {
+    return this.#reserve(options, null);
+  }
+
+  startRun(options: RunOptions = {}): Run {
+    return startRun(this, options);
+  }
+
+  /** @internal The clock a run measures its deadline against. */
+  now(): number {
+    return this.#clock();
+  }
+
+  /** @internal Used by a run to add its own caps to a reservation. */
+  reserveInRun(options: ReserveOptions, hooks: RunHooks): Promise<Lease> {
+    return this.#reserve(options, hooks);
+  }
+
+  async #reserve(options: ReserveOptions, hooks: RunHooks | null): Promise<Lease> {
     const now = this.#clock();
     const inputTokens = count(options.inputTokens ?? 0, 'inputTokens');
     const outputTokens = count(
@@ -193,8 +217,19 @@ class BudgetGuard implements Guard {
     const usage = tokenUsage(inputTokens, outputTokens, options);
     const applicable = this.#applicable(options.subjects, now);
 
-    const costMicros = this.#priceOf(usage, options.model, options.costUsd, applicable);
+    const requireCost = hooks?.requireCost ?? false;
+    const costMicros = this.#priceOf(
+      usage,
+      options.model,
+      options.costUsd,
+      applicable,
+      requireCost,
+    );
     const delta: Counter = { tokens: inputTokens + outputTokens, costMicros, requests: 1 };
+
+    // The run's own caps are checked before the store is touched, so a run
+    // that is over budget never books anything it would have to give back.
+    hooks?.precheck(delta);
 
     if (applicable.length > 0) {
       const updates = applicable.map(
@@ -210,7 +245,7 @@ class BudgetGuard implements Guard {
       if (!result.ok) throw refusal(applicable, result.key, result.current, delta, now);
     }
 
-    return new BudgetLease(this, applicable, delta, options.model);
+    return new BudgetLease(this, applicable, delta, options.model, hooks);
   }
 
   async usage(options: UsageOptions = {}): Promise<RuleUsage[]> {
@@ -263,8 +298,9 @@ class BudgetGuard implements Guard {
     model: string | undefined,
     costUsd: number | undefined,
     applicable: readonly Applicable[],
+    requireCost: boolean,
   ): number {
-    return this.#priceOf(usage, model, costUsd, applicable);
+    return this.#priceOf(usage, model, costUsd, applicable, requireCost);
   }
 
   #priceOf(
@@ -272,12 +308,13 @@ class BudgetGuard implements Guard {
     model: string | undefined,
     costUsd: number | undefined,
     applicable: readonly Applicable[],
+    requireCost: boolean,
   ): number {
     if (costUsd !== undefined) {
       return usdToMicros(count(costUsd, 'costUsd', false));
     }
 
-    const required = applicable.some((entry) => entry.rule.costMicros !== null);
+    const required = requireCost || applicable.some((entry) => entry.rule.costMicros !== null);
     const pricing = this.#priceFor(model, required);
     return pricing === null ? 0 : costMicrosOf(usage, pricing);
   }
@@ -355,6 +392,7 @@ class BudgetLease implements Lease {
   readonly #guard: BudgetGuard;
   readonly #applicable: readonly Applicable[];
   readonly #model: string | undefined;
+  readonly #hooks: RunHooks | null;
   #settled: 'commit' | 'release' | null = null;
 
   constructor(
@@ -362,10 +400,12 @@ class BudgetLease implements Lease {
     applicable: readonly Applicable[],
     reserved: Counter,
     model: string | undefined,
+    hooks: RunHooks | null,
   ) {
     this.#guard = guard;
     this.#applicable = applicable;
     this.#model = model;
+    this.#hooks = hooks;
     this.reserved = reserved;
   }
 
@@ -389,6 +429,7 @@ class BudgetLease implements Lease {
       usage.model ?? this.#model,
       usage.costUsd,
       this.#applicable,
+      this.#hooks?.requireCost ?? false,
     );
 
     this.#claim('commit');
@@ -397,11 +438,7 @@ class BudgetLease implements Lease {
     const costDelta = costMicros - this.reserved.costMicros;
     if (tokenDelta === 0 && costDelta === 0) return;
 
-    await this.#guard.settle(this.#applicable, {
-      tokens: tokenDelta,
-      costMicros: costDelta,
-      requests: 0,
-    });
+    await this.#settle({ tokens: tokenDelta, costMicros: costDelta, requests: 0 });
   }
 
   async release(): Promise<void> {
@@ -409,11 +446,22 @@ class BudgetLease implements Lease {
 
     if (this.reserved.tokens === 0 && this.reserved.costMicros === 0) return;
 
-    await this.#guard.settle(this.#applicable, {
+    await this.#settle({
       tokens: -this.reserved.tokens,
       costMicros: -this.reserved.costMicros,
       requests: 0,
     });
+  }
+
+  /**
+   * The run is told what the lease books before the store is asked to book
+   * it. A refund the store never applied would otherwise leave the run
+   * holding tokens it no longer owes, and a run cap is a local cap: it is
+   * allowed to be stricter than the store, never looser.
+   */
+  #settle(delta: Counter): Promise<void> {
+    this.#hooks?.settle(delta);
+    return this.#guard.settle(this.#applicable, delta);
   }
 
   #claim(as: 'commit' | 'release'): void {

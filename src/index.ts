@@ -34,9 +34,12 @@ export {
   InvalidConfigError,
   InvalidUsageError,
   LeaseSettledError,
+  LoopDetectedError,
   MissingSubjectError,
   PurseStringsError,
   type PurseStringsErrorCode,
+  type RunLimit,
+  RunLimitExceededError,
   UnknownModelError,
 } from './errors.js';
 export {
@@ -50,6 +53,7 @@ export {
   type UsageDimension,
   type UsageOptions,
 } from './guard.js';
+export type { Run, RunLimits, RunOptions } from './run.js';
 export { MemoryStore, type MemoryStoreOptions } from './stores/memory.js';
 export type {
   BudgetRule,
