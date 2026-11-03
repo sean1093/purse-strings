@@ -27,6 +27,9 @@ import { retryAfterSeconds, validateWindow, type WindowBounds, windowAt } from '
  */
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 
+/** The widest instant a `Date` can represent, so a month window stays finite. */
+const MAX_TIME = 8_640_000_000_000_000;
+
 export interface GuardOptions {
   readonly store: BudgetStore;
   readonly rules: readonly BudgetRule[];
@@ -181,7 +184,7 @@ class BudgetGuard implements Guard {
   }
 
   async reserve(options: ReserveOptions = {}): Promise<Lease> {
-    const now = this.#now();
+    const now = this.#clock();
     const inputTokens = count(options.inputTokens ?? 0, 'inputTokens');
     const outputTokens = count(
       options.maxOutputTokens ?? this.#defaultMaxOutputTokens,
@@ -211,11 +214,18 @@ class BudgetGuard implements Guard {
   }
 
   async usage(options: UsageOptions = {}): Promise<RuleUsage[]> {
-    const now = this.#now();
+    const now = this.#clock();
     const applicable = this.#applicable(options.subjects, now);
     if (applicable.length === 0) return [];
 
     const counters = await this.#store.read(applicable.map((entry) => entry.key));
+    if (counters.length !== applicable.length) {
+      // The one place a store could make the library answer confidently and
+      // wrongly: a short result would report an unread rule as entirely unused.
+      throw new InvalidConfigError(
+        `the store returned ${counters.length} counters for ${applicable.length} keys`,
+      );
+    }
 
     return applicable.map((entry, index): RuleUsage => {
       const used = counters[index] ?? { tokens: 0, costMicros: 0, requests: 0 };
@@ -276,6 +286,11 @@ class BudgetGuard implements Guard {
    * An unpriced model is an unbounded one, so a missing price throws when a
    * cost limit applies. When none does, cost is still tracked where a price
    * happens to be configured, and is simply zero where it is not.
+   *
+   * The table has a null prototype, built once in `validatePricing()`. A model
+   * id is client-influenced data, and against an ordinary object a request
+   * naming `constructor` or `toString` would resolve to an inherited value
+   * instead of being reported as unknown.
    */
   #priceFor(model: string | undefined, required: boolean): ModelPricing | null {
     if (model === undefined) {
@@ -288,6 +303,19 @@ class BudgetGuard implements Guard {
       return null;
     }
     return pricing;
+  }
+
+  /**
+   * The clock, checked. A window start outside the `Date` range makes every
+   * bound `NaN`, which reads as a corrupt counter key and a counter that
+   * never expires rather than as the configuration error it is.
+   */
+  #clock(): number {
+    const now = this.#now();
+    if (!Number.isFinite(now) || Math.abs(now) > MAX_TIME) {
+      throw new InvalidConfigError(`the clock returned ${String(now)}, which is not a usable time`);
+    }
+    return now;
   }
 
   #applicable(
@@ -344,12 +372,15 @@ class BudgetLease implements Lease {
   /**
    * `async`, so a settled lease rejects rather than throwing synchronously:
    * a method typed `Promise<void>` that can throw before it returns one is a
-   * trap for `.catch()`. The claim is still staked before the first `await`,
-   * so two settles that start in the same tick cannot both proceed.
+   * trap for `.catch()`.
+   *
+   * The arguments are checked before the lease is claimed, so a bad usage
+   * report -- a provider field that came back undefined, a mistyped model --
+   * leaves the lease settleable and the caller's `catch { release() }` can
+   * still refund the reservation. Everything up to the claim is synchronous,
+   * so two settles that start in the same tick still cannot both proceed.
    */
   async commit(usage: CommitUsage = {}): Promise<void> {
-    this.#claim('commit');
-
     const inputTokens = count(usage.inputTokens ?? 0, 'inputTokens');
     const outputTokens = count(usage.outputTokens ?? 0, 'outputTokens');
     const actual = tokenUsage(inputTokens, outputTokens, usage);
@@ -359,6 +390,8 @@ class BudgetLease implements Lease {
       usage.costUsd,
       this.#applicable,
     );
+
+    this.#claim('commit');
 
     const tokenDelta = inputTokens + outputTokens - this.reserved.tokens;
     const costDelta = costMicros - this.reserved.costMicros;
@@ -449,8 +482,22 @@ function limit(
   return value;
 }
 
+/**
+ * Validates the price list and copies it into a table with no prototype.
+ *
+ * A model id reaches this library from the same place the prompt does, and a
+ * lookup against an ordinary object answers `constructor`, `toString`,
+ * `valueOf` and `__proto__` with inherited values. That would skip
+ * `UnknownModelError` under a cost limit and price the call at `NaN`, which
+ * compares false against every limit -- one request disabling a rule for the
+ * rest of its window. A null prototype has nothing to inherit.
+ *
+ * The copy also detaches the table from the object the caller passed, so a
+ * later mutation of theirs cannot change what a running guard charges.
+ */
 function validatePricing(pricing: PricingTable | undefined): PricingTable {
-  if (pricing === undefined) return {};
+  const table: Record<string, ModelPricing> = Object.create(null) as Record<string, ModelPricing>;
+  if (pricing === undefined) return table;
   if (pricing === null || typeof pricing !== 'object') {
     throw new InvalidConfigError('pricing must be an object keyed by model id');
   }
@@ -461,18 +508,18 @@ function validatePricing(pricing: PricingTable | undefined): PricingTable {
     }
     for (const field of ['input', 'output', 'cachedInput', 'cacheWrite'] as const) {
       const value = prices[field];
-      if (field === 'cachedInput' || field === 'cacheWrite') {
-        if (value === undefined) continue;
-      }
+      if ((field === 'cachedInput' || field === 'cacheWrite') && value === undefined) continue;
+
       if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
         throw new InvalidConfigError(
           `pricing for '${model}' has ${field} = ${String(value)}; it must be a non-negative finite number`,
         );
       }
     }
+    table[model] = prices;
   }
 
-  return pricing;
+  return table;
 }
 
 function validateDefaultMaxOutput(value: number | undefined): number {

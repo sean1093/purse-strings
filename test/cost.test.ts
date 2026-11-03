@@ -17,11 +17,7 @@ describe('ceilMicros', () => {
     // 100 tokens at $0.07 per million is exactly 7 micro-dollars, but the
     // product is 7.000000000000001. Charging 8 is a 14% overcharge on every
     // call at that price, forever.
-    expect(100 * 0.07).not.toBe(7);
-    expect(Math.ceil(100 * 0.07)).toBe(8);
     expect(ceilMicros(100 * 0.07)).toBe(7);
-
-    expect(50 * 1.1).not.toBe(55);
     expect(ceilMicros(50 * 1.1)).toBe(55);
   });
 

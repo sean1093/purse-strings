@@ -17,6 +17,14 @@ const DAY = 86_400_000;
 /** The epoch fell on a Thursday, so `(days + 4) % 7` is the UTC day of week. */
 const EPOCH_DAY_OF_WEEK = 4;
 
+/**
+ * A window long enough that its millisecond length stops being an exact
+ * integer is not a window: `{ seconds: 1e308 }` floors to `NaN` bounds and a
+ * counter key that reads as corrupt. This is about 285,000 years, so nothing
+ * usable is lost by refusing beyond it.
+ */
+const MAX_WINDOW_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
+
 export interface WindowBounds {
   /** Epoch milliseconds at which the current window began. Part of the counter key. */
   readonly start: number;
@@ -45,11 +53,13 @@ export function validateWindow(spec: WindowSpec, ruleId: string): void {
   if (
     spec === null ||
     typeof spec !== 'object' ||
-    !Number.isInteger(spec.seconds) ||
-    spec.seconds <= 0
+    !Number.isSafeInteger(spec.seconds) ||
+    spec.seconds <= 0 ||
+    spec.seconds > MAX_WINDOW_SECONDS
   ) {
     throw new InvalidConfigError(
-      `rule '${ruleId}' has a custom window whose 'seconds' is not a positive integer`,
+      `rule '${ruleId}' has a custom window whose 'seconds' is not a positive integer ` +
+        `of at most ${MAX_WINDOW_SECONDS}`,
     );
   }
 }

@@ -1,4 +1,5 @@
 import type { BudgetStore, ConsumeResult, Counter, CounterUpdate } from '../types.js';
+import { assertFiniteUpdates } from './updates.js';
 
 interface Entry {
   tokens: number;
@@ -46,12 +47,16 @@ export class MemoryStore implements BudgetStore {
     this.#sweepThreshold = this.#sweepAt;
   }
 
-  /** Live counters, expired ones excluded. Exposed for tests and diagnostics. */
+  /** Entries held, including any that have expired but not yet been swept. */
   get size(): number {
     return this.#counters.size;
   }
 
-  consume(updates: readonly CounterUpdate[]): Promise<ConsumeResult> {
+  // `async`, so a rejected batch rejects rather than throwing synchronously
+  // from a method typed `Promise`. The body has no `await`, so the
+  // check-and-increment pass is still one uninterrupted run.
+  async consume(updates: readonly CounterUpdate[]): Promise<ConsumeResult> {
+    assertFiniteUpdates(updates);
     const now = this.#now();
 
     // Checked against the stored value plus the deltas earlier in this same
@@ -92,18 +97,18 @@ export class MemoryStore implements BudgetStore {
       this.#apply(update, now, false);
     }
 
-    return Promise.resolve({ ok: true });
+    return { ok: true };
   }
 
-  add(updates: readonly CounterUpdate[]): Promise<void> {
+  async add(updates: readonly CounterUpdate[]): Promise<void> {
+    assertFiniteUpdates(updates);
     const now = this.#now();
     for (const update of updates) {
       this.#apply(update, now, true);
     }
-    return Promise.resolve();
   }
 
-  read(keys: readonly string[]): Promise<Counter[]> {
+  async read(keys: readonly string[]): Promise<Counter[]> {
     const now = this.#now();
     const out: Counter[] = new Array(keys.length);
 
@@ -115,7 +120,7 @@ export class MemoryStore implements BudgetStore {
           : { tokens: entry.tokens, costMicros: entry.costMicros, requests: entry.requests };
     }
 
-    return Promise.resolve(out);
+    return out;
   }
 
   /** Drops every counter. Useful between tests. */

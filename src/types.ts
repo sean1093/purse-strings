@@ -16,23 +16,31 @@ export interface Counter {
   requests: number;
 }
 
-/** One counter's part of a store operation. */
+/**
+ * One counter's part of a store operation.
+ *
+ * Every field is read-only, and a store must treat it that way. `reserve()`
+ * hands the same `delta` object to every counter in a batch and keeps it as
+ * the lease's record of what was booked, so an adapter that normalised its
+ * input in place would rewrite the other rules' deltas and the amount
+ * `commit()` later subtracts.
+ */
 export interface CounterUpdate {
   /** `<ruleId>:<encodeURIComponent(subject)>:<windowStart>`. */
-  key: string;
-  /** Signed. `consume()` is only ever called with non-negative deltas. */
-  delta: Counter;
+  readonly key: string;
+  /** Signed and finite. `consume()` is only ever called with non-negative deltas. */
+  readonly delta: Readonly<Counter>;
   /**
    * The ceiling each dimension is checked against by `consume()`. A dimension
    * that is absent is unlimited. Ignored by `add()`.
    */
-  limits?: Partial<Counter>;
+  readonly limits?: Readonly<Partial<Counter>>;
   /**
    * Epoch milliseconds when this counter stops counting, or `null` for a
    * counter that never expires. A store must treat a counter at or past this
    * time as zeros even if the platform has not deleted it yet.
    */
-  expiresAt: number | null;
+  readonly expiresAt: number | null;
 }
 
 /**

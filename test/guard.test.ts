@@ -265,6 +265,40 @@ describe('reserve', () => {
     ).resolves.toBeDefined();
   });
 
+  it('rolls a month window over at the first of the next month', async () => {
+    const { guard, time } = guardWith(
+      [{ id: 'monthly', scope: 'global', window: 'month', limits: { requests: 1 } }],
+      Date.UTC(2026, 0, 31, 23, 59, 59, 999),
+    );
+
+    await guard.reserve();
+    await expect(guard.reserve()).rejects.toThrow(BudgetExceededError);
+
+    time.set(Date.UTC(2026, 1, 1));
+
+    await expect(guard.reserve()).resolves.toBeDefined();
+  });
+
+  it('rolls a custom-seconds window over on its own schedule', async () => {
+    const startedAt = Date.UTC(2026, 2, 10, 12, 0, 5);
+    const { guard, time } = guardWith(
+      [{ id: 'burst', scope: 'user', window: { seconds: 10 }, limits: { requests: 2 } }],
+      startedAt,
+    );
+    const subjects = { user: 'u1' };
+
+    await guard.reserve({ subjects });
+    await guard.reserve({ subjects });
+    await expect(guard.reserve({ subjects })).rejects.toThrow(BudgetExceededError);
+
+    // The window is aligned to the epoch, so it ends at :10, not 10s from now.
+    time.set(Date.UTC(2026, 2, 10, 12, 0, 9, 999));
+    await expect(guard.reserve({ subjects })).rejects.toThrow(BudgetExceededError);
+
+    time.set(Date.UTC(2026, 2, 10, 12, 0, 10));
+    await expect(guard.reserve({ subjects })).resolves.toBeDefined();
+  });
+
   it('keeps subjects apart, including ones that would collide without encoding', async () => {
     const { guard } = guardWith([
       { id: 'u', scope: 'user', window: 'day', limits: { tokens: 10 } },
@@ -352,6 +386,28 @@ describe('fail closed', () => {
     await expect(guard.reserve({ subjects: { user: 'u1' }, inputTokens: 10 })).rejects.toThrow(
       /needs a model/,
     );
+  });
+
+  it('treats a model named after an inherited property as unknown', async () => {
+    const { guard } = guardWith([
+      { id: 'cost', scope: 'user', window: 'day', limits: { costUsd: 1 } },
+    ]);
+    const subjects = { user: 'u1' };
+
+    // A model id arrives from the same place the prompt does. Against an
+    // ordinary object these all resolve to inherited values, which would skip
+    // UnknownModelError and price the call at NaN -- and a NaN counter
+    // compares false against every limit for the rest of the window.
+    for (const model of ['constructor', 'toString', 'valueOf', '__proto__', 'hasOwnProperty']) {
+      await expect(
+        guard.reserve({ subjects, model, inputTokens: 1_000_000, maxOutputTokens: 0 }),
+      ).rejects.toBeInstanceOf(UnknownModelError);
+    }
+
+    // The $1 limit still holds afterwards: 1M input tokens at $2/M is $2.
+    await expect(
+      guard.reserve({ subjects, model: 'gpt-4.1', inputTokens: 1_000_000, maxOutputTokens: 0 }),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
   });
 
   it('does not need a price when no cost limit applies', async () => {
@@ -534,6 +590,31 @@ describe('commit and release', () => {
     });
     await released.release();
     await expect(released.commit()).rejects.toThrow(/already released/);
+  });
+
+  it('leaves the lease releasable when the usage report is unusable', async () => {
+    const { guard } = guardWith([
+      { id: 'session', scope: 'session', window: 'total', limits: { tokens: 50_000 } },
+    ]);
+    const subjects = { session: 's1' };
+
+    const lease = await guard.reserve({ subjects, inputTokens: 1_000, maxOutputTokens: 40_000 });
+
+    // A provider field that came back undefined is the ordinary way to get
+    // here. Consuming the lease would strand 41,000 tokens of a 50,000-token
+    // budget for the life of the session.
+    await expect(lease.commit({ inputTokens: 1_000, outputTokens: Number.NaN })).rejects.toThrow(
+      InvalidUsageError,
+    );
+    await expect(
+      lease.commit({ inputTokens: 1_000, outputTokens: 900, model: 'typo', costUsd: -1 }),
+    ).rejects.toThrow(InvalidUsageError);
+
+    await lease.release();
+
+    const [rule] = await guard.usage({ subjects });
+    expect(rule?.tokens.used).toBe(0);
+    expect(rule?.requests.used).toBe(1);
   });
 
   it('refuses the second of two settles that start at the same time', async () => {
@@ -723,5 +804,35 @@ describe('store interaction', () => {
     await expect(guard.reserve({ subjects: { user: 'u1' }, inputTokens: 1 })).rejects.toThrow(
       /refused an unknown counter key/,
     );
+  });
+
+  it('refuses to report usage when the store returns fewer counters than keys', async () => {
+    const guard = createGuard({
+      store: {
+        consistency: 'strong',
+        consume: () => Promise.resolve<ConsumeResult>({ ok: true }),
+        add: () => Promise.resolve(),
+        read: () => Promise.resolve([]),
+      },
+      rules: [{ id: 'a', scope: 'user', window: 'day', limits: { tokens: 10 } }],
+    });
+
+    // Padding with zeros would answer "entirely unused, full limit left" for
+    // a counter nobody actually read.
+    await expect(guard.usage({ subjects: { user: 'u1' } })).rejects.toThrow(
+      /returned 0 counters for 1 keys/,
+    );
+  });
+
+  it('refuses a clock that cannot produce a window', async () => {
+    for (const now of [() => Number.NaN, () => 8.64e15 + 1]) {
+      const guard = createGuard({
+        store: new MemoryStore(),
+        rules: [{ id: 'a', scope: 'user', window: 'month', limits: { tokens: 10 } }],
+        now,
+      });
+
+      await expect(guard.reserve({ subjects: { user: 'u1' } })).rejects.toThrow(InvalidConfigError);
+    }
   });
 });

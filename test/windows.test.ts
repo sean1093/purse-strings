@@ -99,11 +99,20 @@ describe('windowAt', () => {
 });
 
 describe('validateWindow', () => {
-  it('rejects an unknown name and a non-positive or fractional seconds value', () => {
+  it('rejects an unknown name and a seconds value that is not a usable length', () => {
     expect(() => validateWindow('fortnight' as never, 'r')).toThrow(InvalidConfigError);
     expect(() => validateWindow({ seconds: 0 }, 'r')).toThrow(InvalidConfigError);
     expect(() => validateWindow({ seconds: -60 }, 'r')).toThrow(InvalidConfigError);
     expect(() => validateWindow({ seconds: 1.5 }, 'r')).toThrow(InvalidConfigError);
+    expect(() => validateWindow({ seconds: Number.NaN }, 'r')).toThrow(InvalidConfigError);
+
+    // A length whose milliseconds overflow the exact-integer range floors to
+    // NaN bounds: a counter key that reads as corrupt and never expires.
+    expect(() => validateWindow({ seconds: 1e308 }, 'r')).toThrow(InvalidConfigError);
+    expect(() => validateWindow({ seconds: Number.MAX_SAFE_INTEGER }, 'r')).toThrow(
+      InvalidConfigError,
+    );
+    expect(() => validateWindow({ seconds: 86_400 }, 'r')).not.toThrow();
   });
 });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { InvalidUsageError } from '../src/errors.js';
 import { MemoryStore } from '../src/stores/memory.js';
 import { runStoreContract } from './contract/store-contract.js';
 
@@ -45,11 +46,13 @@ describe('MemoryStore', () => {
       });
   });
 
-  it('drops expired counters instead of growing without bound', async () => {
+  it('stays bounded as expired subjects accumulate', async () => {
     let now = Date.UTC(2026, 0, 1);
     const store = new MemoryStore({ now: () => now, sweepAt: 64 });
 
-    // One counter per subject per window is growth an attacker controls.
+    // One counter per subject per window is growth an attacker controls, and
+    // dropping expired entries only when they are touched never reaches the
+    // keys nobody asks about again.
     for (let subject = 0; subject < 500; subject += 1) {
       await store.add([
         {
@@ -59,7 +62,6 @@ describe('MemoryStore', () => {
         },
       ]);
     }
-    expect(store.size).toBe(500);
 
     now += 60_000;
     for (let subject = 0; subject < 100; subject += 1) {
@@ -72,7 +74,32 @@ describe('MemoryStore', () => {
       ]);
     }
 
-    expect(store.size).toBe(100);
+    // The 500 expired counters are gone; the 100 live ones are intact.
+    expect(store.size).toBeLessThanOrEqual(150);
+    expect(await store.read(['rule:user0:0', 'rule:user499:0'])).toEqual([
+      { tokens: 0, costMicros: 0, requests: 0 },
+      { tokens: 0, costMicros: 0, requests: 0 },
+    ]);
+    expect(await store.read(['rule:later0:1', 'rule:later99:1'])).toEqual([
+      { tokens: 1, costMicros: 1, requests: 1 },
+      { tokens: 1, costMicros: 1, requests: 1 },
+    ]);
+  });
+
+  it('refuses a batch carrying a non-finite delta rather than poisoning a counter', async () => {
+    const store = new MemoryStore();
+    const poison = {
+      key: 'k',
+      delta: { tokens: Number.NaN, costMicros: 0, requests: 1 },
+      limits: { tokens: 10 },
+      expiresAt: null,
+    };
+
+    // Every limit check is a `>` comparison, and NaN > n is false: admitting
+    // this would leave a counter that passes every later check as well.
+    await expect(store.consume([poison])).rejects.toThrow(InvalidUsageError);
+    await expect(store.add([poison])).rejects.toThrow(/not finite/);
+    expect(await store.read(['k'])).toEqual([{ tokens: 0, costMicros: 0, requests: 0 }]);
   });
 
   it('keeps counters that never expire', async () => {

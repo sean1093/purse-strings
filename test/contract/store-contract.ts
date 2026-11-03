@@ -175,6 +175,25 @@ export function runStoreContract(name: string, create: StoreFactory): void {
       });
     });
 
+    it('rejects a non-finite delta instead of writing it', async () => {
+      await withStore(async ({ store }) => {
+        const [a] = freshKeys(1) as [string];
+        const poison: CounterUpdate = {
+          key: a,
+          delta: { tokens: Number.NaN, costMicros: Number.POSITIVE_INFINITY, requests: 1 },
+          limits: { tokens: 10 },
+          expiresAt: null,
+        };
+
+        // Every limit check is a `>` comparison, and one against NaN is
+        // false: a counter that absorbed this would pass every later check
+        // too, so the rule it belongs to would stop limiting that dimension.
+        await expect(store.consume([poison])).rejects.toThrow();
+        await expect(store.add([poison])).rejects.toThrow();
+        expect(await store.read([a])).toEqual([ZERO]);
+      });
+    });
+
     it('applies add() unconditionally, past any limit', async () => {
       await withStore(async ({ store }) => {
         const [a] = freshKeys(1) as [string];
