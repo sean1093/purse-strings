@@ -183,6 +183,21 @@ describe('Guard.startRun', () => {
       expect(run.toolCalls).toBe(2);
     });
 
+    it('bounds the work a shared-reference argument graph costs', () => {
+      const run = guardWith().guard.startRun({ maxIdenticalToolCalls: 1 });
+      // 24 levels, every level holding the one below it twice: 25 objects
+      // that a depth-bounded walk alone visits 2^24 times.
+      let node: Record<string, unknown> = { leaf: 1 };
+      for (let level = 0; level < 24; level += 1) node = { left: node, right: node };
+
+      const startedAt = performance.now();
+      run.recordToolCall('plan', node);
+      const elapsed = performance.now() - startedAt;
+
+      expect(elapsed).toBeLessThan(2_000);
+      expect(() => run.recordToolCall('plan', node)).toThrow(LoopDetectedError);
+    });
+
     it('rejects a tool name that could not identify a call', () => {
       const run = guardWith().guard.startRun({ maxToolCalls: 5 });
 
@@ -229,6 +244,28 @@ describe('Guard.startRun', () => {
       }
     });
 
+    it('re-arms a deadline wider than a 32-bit timer instead of firing at once', async () => {
+      vi.useFakeTimers({ now: START });
+      try {
+        // Over 2^31-1 milliseconds: `setTimeout` cannot hold the delay, and
+        // Node fires it immediately rather than weeks later.
+        const run = createGuard({ store: new MemoryStore(), rules: [] }).startRun({
+          maxDurationMs: 3 * 2_147_483_647,
+        });
+
+        await vi.advanceTimersByTimeAsync(2_147_483_647);
+        expect(run.signal.aborted).toBe(false);
+        expect(vi.getTimerCount()).toBe(1);
+
+        await vi.advanceTimersByTimeAsync(2 * 2_147_483_647);
+
+        expect(run.signal.aborted).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('expires on the clock even when the timer never gets to fire', async () => {
       const { guard, time } = guardWith();
       const run = guard.startRun({ maxDurationMs: 1_000 });
@@ -250,6 +287,41 @@ describe('Guard.startRun', () => {
       run.end();
 
       expect(during).toBe(before);
+    });
+  });
+
+  describe('overlapping reservations', () => {
+    it('counts a step that is still in flight against maxSteps', async () => {
+      const { guard } = guardWith([
+        { id: 'global', scope: 'global', window: 'day', limits: { tokens: 1_000_000 } },
+      ]);
+      const run = guard.startRun({ maxSteps: 1 });
+
+      const settled = await Promise.allSettled([
+        run.reserve({ inputTokens: 1, maxOutputTokens: 0 }),
+        run.reserve({ inputTokens: 1, maxOutputTokens: 0 }),
+      ]);
+
+      expect(settled.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+      expect(run.steps).toBe(1);
+    });
+
+    it('counts tokens that are still in flight against the run budget', async () => {
+      const { guard, store } = guardWith([
+        { id: 'global', scope: 'global', window: 'day', limits: { tokens: 1_000_000 } },
+      ]);
+      const run = guard.startRun({ limits: { tokens: 100 } });
+
+      const settled = await Promise.allSettled([
+        run.reserve({ inputTokens: 90, maxOutputTokens: 0 }),
+        run.reserve({ inputTokens: 90, maxOutputTokens: 0 }),
+      ]);
+
+      expect(settled.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+      expect(run.tokens).toBe(90);
+      expect(await store.read([`global:global:${DAY}`])).toEqual([
+        { tokens: 90, costMicros: 0, requests: 1 },
+      ]);
     });
   });
 

@@ -26,8 +26,18 @@ import type { Counter } from './types.js';
 /** How deep a tool argument is walked before the rest is summarised. */
 const MAX_ARGUMENT_DEPTH = 24;
 
+/**
+ * How many values one walk visits. A bounded depth is not a bounded walk: an
+ * argument object that holds the same sub-object in two fields is visited
+ * once per path that reaches it, which is exponential in the depth.
+ */
+const MAX_ARGUMENT_NODES = 10_000;
+
 /** How long a tool-call signature may get. Arguments come from the model. */
 const MAX_SIGNATURE_LENGTH = 4096;
+
+/** The widest delay `setTimeout` holds. Anything larger fires immediately. */
+const MAX_TIMER_DELAY = 2_147_483_647;
 
 /** A token and cost budget for one run, on top of the guard's rules. */
 export interface RunLimits {
@@ -144,14 +154,7 @@ class AgentRun implements Run {
     this.#duration = positive(options.maxDurationMs, 'maxDurationMs', true);
     this.endsAt = this.#duration === null ? null : this.startedAt + this.#duration;
 
-    if (this.#duration !== null) {
-      const timer = setTimeout(() => this.#expire(), this.#duration);
-      // Node keeps the process alive for a pending timer. A budget deadline
-      // must not be the reason a script does not exit; other runtimes have no
-      // unref() and need none.
-      (timer as unknown as { unref?: () => void }).unref?.();
-      this.#cancelTimer = () => clearTimeout(timer);
-    }
+    if (this.#duration !== null) this.#arm(this.#duration);
   }
 
   get signal(): AbortSignal {
@@ -174,26 +177,44 @@ class AgentRun implements Run {
     return this.#costMicros;
   }
 
+  /**
+   * The step and the reserved amount are taken before the `await`, not after
+   * it. An agent that fans out parallel model calls runs every synchronous
+   * part of the second `reserve()` while the first is still suspended on the
+   * store, and a cap checked against counters that call has not updated yet
+   * is not a cap. A refused reservation gives both back.
+   */
   async reserve(options: ReserveOptions = {}): Promise<Lease> {
     this.#checkAlive();
 
     if (this.#maxSteps !== null && this.#steps + 1 > this.#maxSteps) {
       throw new RunLimitExceededError('steps', this.#maxSteps, this.#steps + 1);
     }
-
-    const lease = await this.#host.reserveInRun(this.#merge(options), {
-      requireCost: this.#maxCostMicros !== null,
-      precheck: (reserved) => this.#checkBudget(reserved),
-      settle: (delta) => {
-        this.#tokens += delta.tokens;
-        this.#costMicros += delta.costMicros;
-      },
-    });
-
     this.#steps += 1;
-    this.#tokens += lease.reserved.tokens;
-    this.#costMicros += lease.reserved.costMicros;
-    return lease;
+    let bookedTokens = 0;
+    let bookedCostMicros = 0;
+
+    try {
+      return await this.#host.reserveInRun(this.#merge(options), {
+        requireCost: this.#maxCostMicros !== null,
+        precheck: (reserved) => {
+          this.#checkBudget(reserved);
+          bookedTokens = reserved.tokens;
+          bookedCostMicros = reserved.costMicros;
+          this.#tokens += bookedTokens;
+          this.#costMicros += bookedCostMicros;
+        },
+        settle: (delta) => {
+          this.#tokens += delta.tokens;
+          this.#costMicros += delta.costMicros;
+        },
+      });
+    } catch (error) {
+      this.#steps -= 1;
+      this.#tokens -= bookedTokens;
+      this.#costMicros -= bookedCostMicros;
+      throw error;
+    }
   }
 
   recordToolCall(tool: string, args?: unknown): void {
@@ -260,13 +281,35 @@ class AgentRun implements Run {
     }
   }
 
+  /**
+   * The clock decides, the timer only wakes this up. A delay wider than a
+   * 32-bit signed integer does not fit `setTimeout`, which fires it
+   * immediately instead; a run with a deadline weeks away would otherwise
+   * expire in the first millisecond. An early wake re-arms instead.
+   */
   #expire(): void {
     if (this.#finished !== null) return;
+
+    const now = this.#host.now();
+    if (this.endsAt !== null && now < this.endsAt) {
+      this.#arm(this.endsAt - now);
+      return;
+    }
+
     this.#finished = 'expired';
     this.#stopTimer();
     this.#controller.abort(
-      new RunLimitExceededError('duration', this.#duration ?? 0, this.#host.now() - this.startedAt),
+      new RunLimitExceededError('duration', this.#duration ?? 0, now - this.startedAt),
     );
+  }
+
+  #arm(delay: number): void {
+    const timer = setTimeout(() => this.#expire(), Math.min(delay, MAX_TIMER_DELAY));
+    // Node keeps the process alive for a pending timer. A budget deadline
+    // must not be the reason a script does not exit; other runtimes have no
+    // unref() and need none.
+    (timer as unknown as { unref?: () => void }).unref?.();
+    this.#cancelTimer = () => clearTimeout(timer);
   }
 
   #stopTimer(): void {
@@ -304,17 +347,25 @@ function positive(value: number | undefined, name: string, integer: boolean): nu
   return value;
 }
 
+/** What is left of one walk's budget. Spent across the whole argument graph. */
+interface WalkBudget {
+  nodes: number;
+}
+
 /**
  * A tool call's identity: its name and its arguments, compared as JSON-shaped
  * data, independently of key order.
  *
- * Arguments come from the model, so the walk is bounded in depth and the
- * result in length. A truncated signature carries the untruncated length,
- * which keeps two long but different argument sets from colliding on the
- * shared prefix alone — and a collision would refuse a call, never allow one.
+ * Arguments come from the model, so the walk is bounded in depth, in the
+ * number of values it visits and in the length of its result. A signature
+ * that hit one of those bounds can only collide with another that hit the
+ * same bound, and a collision refuses a call rather than allowing one, which
+ * is the safe direction for a loop detector. The truncated form carries the
+ * untruncated length so two long but different argument sets do not collide
+ * on their shared prefix alone.
  */
 function signatureOf(tool: string, args: unknown): string {
-  const body = canonical(args, 0);
+  const body = canonical(args, 0, { nodes: MAX_ARGUMENT_NODES });
   const bounded =
     body.length <= MAX_SIGNATURE_LENGTH
       ? body
@@ -323,7 +374,7 @@ function signatureOf(tool: string, args: unknown): string {
   return `${tool}\u0000${bounded}`;
 }
 
-function canonical(value: unknown, depth: number): string {
+function canonical(value: unknown, depth: number, budget: WalkBudget): string {
   if (value === null) return 'null';
 
   switch (typeof value) {
@@ -344,14 +395,18 @@ function canonical(value: unknown, depth: number): string {
   }
 
   // Deep nesting is where a recursive walk becomes a stack overflow, and a
-  // cycle is where it becomes an infinite one. Both stop here.
+  // cycle is where it becomes an infinite one. Both stop here. Shared
+  // references stop at the node budget instead: they are neither deep nor
+  // cyclic, and they still cost one visit per path that reaches them.
   if (depth >= MAX_ARGUMENT_DEPTH) return '[deep]';
+  if (budget.nodes <= 0) return '[over]';
+  budget.nodes -= 1;
 
   if (Array.isArray(value)) {
     let out = '[';
     for (let index = 0; index < value.length; index += 1) {
       if (index > 0) out += ',';
-      out += canonical(value[index], depth + 1);
+      out += canonical(value[index], depth + 1, budget);
     }
     return `${out}]`;
   }
@@ -361,7 +416,7 @@ function canonical(value: unknown, depth: number): string {
   for (let index = 0; index < keys.length; index += 1) {
     const key = keys[index] as string;
     if (index > 0) out += ',';
-    out += `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key], depth + 1)}`;
+    out += `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key], depth + 1, budget)}`;
   }
   return `${out}}`;
 }

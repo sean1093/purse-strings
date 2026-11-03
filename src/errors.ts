@@ -24,9 +24,9 @@ export type PurseStringsErrorCode =
   | 'RUN_LIMIT_EXCEEDED'
   /** The same tool was called with the same arguments too many times in one run. */
   | 'LOOP_DETECTED'
-  /** The guard options are not usable. Thrown by `createGuard()`. */
+  /** The guard options or a run's caps are not usable. Thrown by `createGuard()` and `startRun()`. */
   | 'INVALID_CONFIG'
-  /** An argument to `reserve()` or `commit()` is not usable. */
+  /** An argument to a call is not usable, or the run it was made on has ended. */
   | 'INVALID_USAGE';
 
 export class PurseStringsError extends Error {
@@ -183,7 +183,7 @@ export class LoopDetectedError extends PurseStringsError {
   }
 }
 
-/** The guard options are not usable. Thrown by `createGuard()`, before traffic. */
+/** The guard options or a run's caps are not usable. Thrown before any traffic. */
 export class InvalidConfigError extends PurseStringsError {
   constructor(message: string) {
     super('INVALID_CONFIG', message);
@@ -191,7 +191,7 @@ export class InvalidConfigError extends PurseStringsError {
   }
 }
 
-/** An argument to a call is not usable. */
+/** An argument to a call is not usable, or the run it was made on has ended. */
 export class InvalidUsageError extends PurseStringsError {
   constructor(message: string) {
     super('INVALID_USAGE', message);
