@@ -25,6 +25,17 @@
  */
 
 export {
+  BudgetCounterObject,
+  type DurableObjectIdLike,
+  type DurableObjectNamespaceLike,
+  type DurableObjectResponseLike,
+  type DurableObjectStateLike,
+  type DurableObjectStorageLike,
+  DurableObjectStore,
+  type DurableObjectStoreOptions,
+  type DurableObjectStubLike,
+} from './stores/cloudflare/durable-object.js';
+export {
   type KVNamespaceLike,
   type KVPutOptions,
   KVStore,

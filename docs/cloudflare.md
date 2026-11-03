@@ -8,7 +8,7 @@ interchangeable.
 | `KVStore` | `eventual` | A soft cap: a sequential agent loop, or a per-user limit where one user is one client making one request at a time. |
 | `DurableObjectStore` | `strong` | A hard cap, including one that has to hold under concurrent requests. |
 
-`KVStore` is in this entry point today. A Durable Objects store follows.
+Both live in `purse-strings/cloudflare`.
 
 ## `KVStore`
 
@@ -104,6 +104,97 @@ and the request fails before the model is called. A store that swallowed a
 write would leave the guard admitting calls against a counter that never
 moved. Writes in the same batch that had already landed stay, which
 over-counts rather than under-counts.
+
+## `DurableObjectStore`
+
+Cloudflare routes every request for one object name to one instance and runs
+them one at a time, so the read-check-write that KV cannot make atomic is
+atomic here. That is what makes a Cloudflare budget a hard limit.
+
+Export the counter object from your Worker and bind its namespace:
+
+```ts
+import { createGuard } from 'purse-strings';
+import { BudgetCounterObject, DurableObjectStore } from 'purse-strings/cloudflare';
+
+export { BudgetCounterObject };
+
+interface Env {
+  BUDGET_COUNTERS: DurableObjectNamespace;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const guard = createGuard({
+      store: new DurableObjectStore(env.BUDGET_COUNTERS),
+      rules: [
+        { id: 'user-daily', scope: 'user', window: 'day', limits: { costUsd: 1 } },
+        { id: 'fleet-daily', scope: 'global', window: 'day', limits: { costUsd: 200 } },
+      ],
+      pricing: { 'gpt-4.1': { input: 2, output: 8 } },
+    });
+    // ...
+  },
+};
+```
+
+```jsonc
+{
+  "name": "my-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [{ "name": "BUDGET_COUNTERS", "class_name": "BudgetCounterObject" }]
+  },
+  "migrations": [{ "tag": "v1", "new_classes": ["BudgetCounterObject"] }]
+}
+```
+
+`BudgetCounterObject` uses the fetch-handler form of the API —
+`constructor(state, env)`, `fetch(request)`, `alarm()` — and imports nothing
+from `cloudflare:workers`, so it works on any compatibility date that supports
+Durable Objects. It is a classic, key-value-backed object: the migration above
+is `new_classes`, not `new_sqlite_classes`.
+
+### Options
+
+| Option | Default | What it does |
+|---|---|---|
+| `prefix` | `''` | Prefixed to every object name, so one namespace can hold other counters. |
+| `now` | `Date.now` | Injectable clock, in epoch milliseconds. Tests pass their own. |
+
+### One object per counter, and what a multi-counter batch costs
+
+A rule is one object: `user-daily:u_42:1772323200000` is a different object
+from `fleet-daily:global:1772323200000`. A reservation that applies to two
+rules therefore talks to two objects, and there is no transaction across
+them.
+
+`consume()` books each counter in turn, and if a later one refuses it
+compensates the ones it already booked, in reverse. No counter is ever left
+over its limit. What is visible is the window in which a compensation is
+still in flight: a concurrent request can be refused against a counter that
+is about to be given back. Refusing a call that would have fit is the safe
+side of that trade, and it is the only side a per-object lock can offer
+without a distributed transaction.
+
+The same compensation runs when an object fails outright rather than
+refusing, so a batch that throws leaves nothing booked.
+
+### Expiry
+
+When an object first creates a counter it sets an alarm for the end of the
+window, and the alarm deletes the object's storage, so a finished window
+costs nothing to keep. Enforcement does not depend on the alarm having run: a
+counter at or past its `expiresAt` reads as zeros.
+
+### Cost and latency
+
+Each counter is one object, which means one request per counter per
+`reserve()` and per `commit()`. Objects are placed near the first Worker that
+addresses them, so a global rule's object lives in one region and every other
+region pays a round trip to it. That is the price of a hard global cap; a
+per-user rule has no such cost, because the user's object follows the user.
 
 ## Running the tests
 
