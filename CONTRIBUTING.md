@@ -49,6 +49,7 @@ loudly if `package.json` and the lockfile disagree, which is what CI does.
 | `npm run lint:fix` | `biome check --write .` | Applies every fix Biome can apply. Run this instead of arguing with `lint`. |
 | `npm run typecheck` | `tsc --noEmit` | Type errors across the whole project, including tests. |
 | `npm run check:docs` | `node scripts/check-docs.mjs` | Every relative link and heading anchor in the docs resolves, every code fence declares a language, and no merge marker or unfinished-work note survived. It also compares this table against the scripts `package.json` defines, in both directions. |
+| `npm run check:examples` | `tsc -p examples/tsconfig.json` | Type-checks `examples/` against the built package, so a snippet that no longer compiles fails CI. Run `npm run build` first. |
 | `npm run check:exports` | `attw --pack . && publint` | Packs the tarball and verifies the `exports` map really resolves for ESM, CJS, and TypeScript consumers. |
 | `npm run size` | `size-limit` | Fails if a bundle grows past its budget, so the size claim in the README stays true. |
 

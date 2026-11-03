@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "paths": {
+      "purse-strings": ["../dist/index.d.ts"],
+      "purse-strings/firestore": ["../dist/firestore.d.ts"],
+      "purse-strings/cloudflare": ["../dist/cloudflare.d.ts"]
+    }
+  },
+  "include": ["."]
+}
