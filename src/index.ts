@@ -67,3 +67,13 @@ export type {
   TokenUsage,
   WindowSpec,
 } from './types.js';
+export {
+  type AnthropicUsage,
+  estimateTokens,
+  type GeminiUsageMetadata,
+  type OpenAIInputDetails,
+  type OpenAIUsage,
+  usageFromAnthropic,
+  usageFromGemini,
+  usageFromOpenAI,
+} from './usage.js';
