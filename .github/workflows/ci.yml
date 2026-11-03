@@ -51,6 +51,12 @@ jobs:
       - name: Build distributables
         run: npm run build
 
+      # After the build, because they are checked against dist/ rather than
+      # against src/: a snippet that compiles only against the sources is not
+      # a snippet a reader can run.
+      - name: Type-check the examples
+        run: npm run check:examples
+
       - name: Validate published entry points
         run: npm run check:exports
 

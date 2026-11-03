@@ -76,7 +76,8 @@
     "check:exports": "attw --pack . && publint",
     "size": "size-limit",
     "release": "changeset publish",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "check:examples": "tsc -p examples/tsconfig.json"
   },
   "keywords": [
     "llm",
