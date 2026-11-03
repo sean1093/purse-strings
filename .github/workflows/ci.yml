@@ -66,6 +66,45 @@ jobs:
           path: coverage/
           retention-days: 14
 
+  # The contract suite against the real backend. A store adapter is trusted on
+  # that suite and nothing else: the guarantee in the threat model is only as
+  # strong as the store beneath it, and a mock cannot refuse a transaction for
+  # contention. The suite fails rather than skips when the emulator is absent.
+  firestore:
+    name: Firestore emulator
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      # The Firestore emulator is a Java program that firebase-tools downloads
+      # and runs; the runner's own JDK is not guaranteed.
+      - name: Set up Java 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cache the emulator binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-firestore
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the store contract suite against the emulator
+        run: >-
+          npx --yes firebase-tools@15 emulators:exec --only firestore
+          --project demo-purse-strings "npm run test:firestore"
+
   # The guard is a control that other people's bills depend on, so it has to
   # behave identically on every runtime its users deploy to, not only the one
   # that built it. Windows and macOS run the newest supported Node because the
