@@ -15,7 +15,12 @@ export default defineConfig({
       // suite in vitest.integration.config.ts, which this run does not
       // execute. Counting them here would measure the emulator job's work
       // against a run that never loads the file.
-      exclude: ['src/firestore.ts', 'src/stores/firestore.ts'],
+      exclude: [
+        'src/firestore.ts',
+        'src/stores/firestore.ts',
+        'src/cloudflare.ts',
+        'src/stores/cloudflare/**',
+      ],
       reporter: ['text', 'lcov', 'html'],
       thresholds: {
         lines: 90,

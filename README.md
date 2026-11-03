@@ -18,6 +18,9 @@ in memory, Firestore or Cloudflare (Durable Objects or Workers KV).
 - [The Firestore store](https://github.com/sean1093/purse-strings/blob/main/docs/firestore.md)
   — setup for Firebase and Google Cloud, the TTL policy on `expiresAt`, and
   the write rate a single counter document sustains.
+- [The Cloudflare stores](https://github.com/sean1093/purse-strings/blob/main/docs/cloudflare.md)
+  — the KV and Durable Objects bindings, and which of the two a hard
+  limit needs.
 - [Contributing](https://github.com/sean1093/purse-strings/blob/main/CONTRIBUTING.md)
   — scripts, project layout, how to add a store adapter, the quality gates and
   the release process.

@@ -10,5 +10,11 @@
     "path": "dist/firestore.js",
     "limit": "2 kB",
     "gzip": true
+  },
+  {
+    "name": "purse-strings/cloudflare (ESM, gzipped)",
+    "path": "dist/cloudflare.js",
+    "limit": "2 kB",
+    "gzip": true
   }
 ]

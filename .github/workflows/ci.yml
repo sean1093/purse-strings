@@ -105,6 +105,28 @@ jobs:
           npx --yes firebase-tools@15 emulators:exec --only firestore
           --project demo-purse-strings "npm run test:firestore"
 
+  # Miniflare runs the same workerd Cloudflare runs, with the real KV
+  # implementation behind it, so the contract suite exercises the platform's
+  # own rules rather than a mock of them. No account and no network needed.
+  cloudflare:
+    name: Cloudflare (Miniflare)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the store contract suite against Miniflare
+        run: npm run test:cloudflare
+
   # The guard is a control that other people's bills depend on, so it has to
   # behave identically on every runtime its users deploy to, not only the one
   # that built it. Windows and macOS run the newest supported Node because the
