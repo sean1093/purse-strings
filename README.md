@@ -10,6 +10,12 @@ in memory, Firestore or Cloudflare (Durable Objects or Workers KV).
 > **Status:** under active development. The plan is tracked in the
 > [v0.1.0 milestone](https://github.com/sean1093/purse-strings/milestone/1).
 
+## Documentation
+
+- [Threat model and design](https://github.com/sean1093/purse-strings/blob/main/docs/threat-model.md)
+  — what the guard defends, what it guarantees under concurrency and failure,
+  and where it stops.
+
 ## License
 
 [MIT](LICENSE)
