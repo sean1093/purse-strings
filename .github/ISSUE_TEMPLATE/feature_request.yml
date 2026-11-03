@@ -1,0 +1,95 @@
+name: Feature request
+description: Propose a capability purse-strings does not have yet.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read
+        ["What does not belong in this library"](https://github.com/sean1093/purse-strings/blob/main/CONTRIBUTING.md#what-does-not-belong-in-this-library)
+        first. A built-in price table, a tokenizer, provider SDK imports,
+        sliding windows, fail-open behaviour on store errors, prompt
+        inspection, cross-process runs and in-guard retries are settled
+        non-goals.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: >-
+        What are you trying to limit, and what makes it awkward or impossible
+        with the current API? Describe the situation, not the solution.
+      placeholder: >-
+        I bill tenants, not users, and a tenant's budget should be shared by
+        every user in it. Today I have to look up the tenant myself and pass it
+        as a subject on every call.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API
+      description: >-
+        Sketch the signature and show a call with its result. Keep it
+        consistent with the existing options objects and error classes.
+      render: typescript
+      placeholder: |
+        // src/guard.ts
+        interface BudgetRule {
+          resolveSubject?: (subjects: Record<string, string>) => string | undefined;
+        }
+    validations:
+      required: true
+
+  - type: textarea
+    id: safety
+    attributes:
+      label: Effect on the guarantee
+      description: >-
+        This library is a spending control. Does your proposal change what is
+        booked, when it is booked, or how atomically? Could it let a request
+        through that is refused today, or grow state an attacker controls?
+        See the
+        [threat model](https://github.com/sean1093/purse-strings/blob/main/docs/threat-model.md).
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: >-
+        What did you try instead, and why was it not good enough? Userland
+        code, another library, or a different shape of the same idea.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Compatibility and cost
+      description: >-
+        Does this break any existing behaviour? Roughly how much code and
+        bundle size does it add? Say so if you are willing to open the pull
+        request.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing open and closed issues and this is not a duplicate.
+          required: true
+        - label: >-
+            I read the non-goals in CONTRIBUTING.md and this request is not a
+            price table, a tokenizer, an SDK import, a sliding window,
+            fail-open behaviour, prompt inspection, a cross-process run, or
+            retry logic inside the guard.
+          required: true
+        - label: This request adds no runtime dependency.
+          required: true

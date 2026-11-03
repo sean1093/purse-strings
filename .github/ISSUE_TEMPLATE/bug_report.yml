@@ -1,0 +1,133 @@
+name: Bug report
+description: Something in purse-strings behaves differently from what is documented.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a report. A minimal snippet we can paste into a file
+        and run is worth more than any amount of description.
+
+        Do not report a way to spend past a configured limit here. That is a
+        vulnerability: use
+        [private reporting](https://github.com/sean1093/purse-strings/security/advisories/new)
+        instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you observe? Include the exact error message, error `code`, or returned value.
+      placeholder: reserve() resolved even though the user-daily rule was already at its tokens limit.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: >-
+        The smallest snippet that shows the problem. Include the guard
+        configuration, and inject a fixed clock with the `now` option rather
+        than depending on when the snippet runs.
+      render: typescript
+      placeholder: |
+        import { createGuard, MemoryStore } from 'purse-strings';
+
+        const guard = createGuard({
+          store: new MemoryStore(),
+          rules: [{ id: 'user-daily', scope: 'user', window: 'day', limits: { tokens: 100 } }],
+          now: () => Date.UTC(2026, 0, 5, 12, 0, 0),
+        });
+
+        await guard.reserve({ subjects: { user: 'u1' }, inputTokens: 90, maxOutputTokens: 90 });
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should have happened, and where is that documented?
+      placeholder: "A BudgetExceededError with dimension 'tokens' -- 90 + 90 is over the 100-token limit."
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: purse-strings version
+      description: "`npm ls purse-strings`. Please confirm on the latest release before filing."
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: store
+    attributes:
+      label: Which store?
+      description: >-
+        The guarantee depends on the store. `KVStore` is eventually consistent
+        by design, and `MemoryStore` is per process.
+      options:
+        - MemoryStore
+        - FirestoreStore
+        - KVStore (Cloudflare Workers KV)
+        - DurableObjectStore (Cloudflare)
+        - A store I wrote myself
+      default: 0
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime and version
+      description: "`node --version`, or the Workers, Deno or Bun version. Name the platform if it is not Node."
+      placeholder: Node.js v22.11.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: module-system
+    attributes:
+      label: How are you loading the library?
+      options:
+        - ESM (import)
+        - CJS (require)
+      default: 0
+    validations:
+      required: true
+
+  - type: input
+    id: deployment
+    attributes:
+      label: How many processes or instances share the counters?
+      description: >-
+        One replica or ten changes what a limit means. Say "one" for a local
+        reproduction.
+      placeholder: 3 Cloud Run instances
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Workarounds you found, when it started, or a link to a failing branch.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing open and closed issues and this is not a duplicate.
+          required: true
+        - label: >-
+            This is not a way to spend past a configured limit. If it is, I will
+            report it privately instead.
+          required: true

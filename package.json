@@ -40,6 +40,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "tsc --noEmit",
+    "check:docs": "node scripts/check-docs.mjs",
     "check:exports": "attw --pack . && publint",
     "size": "size-limit",
     "release": "changeset publish",
