@@ -11,6 +11,11 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
+      // The store adapters that need a backend are covered by the contract
+      // suite in vitest.integration.config.ts, which this run does not
+      // execute. Counting them here would measure the emulator job's work
+      // against a run that never loads the file.
+      exclude: ['src/firestore.ts', 'src/stores/firestore.ts'],
       reporter: ['text', 'lcov', 'html'],
       thresholds: {
         lines: 90,

@@ -81,8 +81,15 @@ Two things are worth knowing about it:
   store never relies on it: a document at or past its `expiresAt` reads as
   zeros, so the next window always starts from zero whether or not the old
   document is gone.
-- The policy needs a single-field index exemption to be efficient, which
-  Firestore creates with the policy. Deletes are billed as deletes.
+- Add a single-field index exemption for `expiresAt`. Firestore does not add
+  one with the policy: every field is indexed by default, and an indexed
+  timestamp on the one field every counter write touches is exactly the
+  hotspot the next section is about. Nothing here ever queries `expiresAt`,
+  so disabling its index costs nothing. In the console it is
+  **Firestore → Indexes → Single field → Add exemption**, with both ascending
+  and descending set to disabled; in an index definition file it is a
+  `fieldOverrides` entry for `expiresAt` with an empty `indexes` array.
+  Expired documents are billed as deletes.
 
 ## The write rate of one document
 
@@ -91,21 +98,24 @@ Beyond that, latency climbs and transactions start being refused for
 contention; `maxAttempts` retries them, and when the retries run out the
 reservation fails rather than silently passing.
 
+A model call is two writes to each counter it touches: `reserve()` books the
+worst case and `commit()` books the difference. So one write per second is
+**one model call every two seconds** per counter document — a commit that
+matches its reservation exactly writes nothing, but that is not the case to
+plan for.
+
 A counter document is as hot as its rule is broad:
 
 | Rule scope | Document | Safe on Firestore |
 |---|---|---|
-| `user`, `session`, `tenant` | One per subject per window | Yes, unless a single subject exceeds about one model call per second |
-| `global` | One document for the whole fleet | Only below about one model call per second across every instance |
+| `user`, `session`, `tenant` | One per subject per window | Yes, unless a single subject exceeds about one model call every two seconds |
+| `global` | One document for the whole fleet | Only below about one model call every two seconds across every instance |
 
 So a global cap on Firestore is a cap on a service that makes fewer than one
-model call per second. Above that, put the global rule somewhere built for a
-hot counter — a Cloudflare Durable Object, or a sharded counter of your own —
-and keep the per-user and per-session rules on Firestore, where each subject
-writes its own document.
-
-Note that `reserve()` writes once and `commit()` writes once, so a model call
-is two writes to each counter it touches.
+model call every two seconds. Above that, put the global rule somewhere built
+for a hot counter — a Cloudflare Durable Object, or a sharded counter of your
+own — and keep the per-user and per-session rules on Firestore, where each
+subject writes its own document.
 
 ## Security rules
 

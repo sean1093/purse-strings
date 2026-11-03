@@ -91,6 +91,8 @@ interface Slot {
   counter: Counter;
   /** The expiry to store: the live document's, or the first update's. */
   expiresAt: number | null;
+  /** The document exists and has not expired. */
+  stored: boolean;
   /** Something in this batch changes the document. */
   touched: boolean;
 }
@@ -266,6 +268,7 @@ async function load(
       ref: refs.get(update.key) as FirestoreDocumentReference,
       counter: { tokens: 0, costMicros: 0, requests: 0 },
       expiresAt: update.expiresAt,
+      stored: false,
       touched: false,
     });
   }
@@ -284,6 +287,7 @@ async function load(
       requests: numberOf(stored.requests),
     };
     slot.expiresAt = millisOf(stored.expiresAt);
+    slot.stored = true;
   }
 
   return slots;
@@ -292,6 +296,12 @@ async function load(
 function write(transaction: FirestoreTransaction, slots: Map<string, Slot>): void {
   for (const slot of slots.values()) {
     if (!slot.touched) continue;
+    // A refund whose window has already rolled over clamps to zeros against a
+    // document that is gone. Creating one would be an avoidable write, on a
+    // hot document, under a key an attacker influences, carrying an expiry
+    // already in the past.
+    if (!slot.stored && isZero(slot.counter)) continue;
+
     transaction.set(slot.ref, {
       tokens: slot.counter.tokens,
       costMicros: slot.counter.costMicros,
@@ -301,6 +311,10 @@ function write(transaction: FirestoreTransaction, slots: Map<string, Slot>): voi
       expiresAt: slot.expiresAt === null ? null : new Date(slot.expiresAt),
     });
   }
+}
+
+function isZero(counter: Counter): boolean {
+  return counter.tokens === 0 && counter.costMicros === 0 && counter.requests === 0;
 }
 
 /** `clamp` is for `add()`, which is unconditional and never goes below zero. */
