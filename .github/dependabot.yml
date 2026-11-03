@@ -21,8 +21,31 @@ updates:
         update-types:
           - minor
           - patch
-    # Majors stay ungrouped on purpose: a toolchain major usually needs a
-    # config migration, and it should be reviewable and revertable alone.
+      # The runner and its coverage provider share a peer range on the same
+      # major, so a major that arrives as two pull requests breaks the
+      # install in both. This group includes majors for that reason.
+      vitest:
+        patterns:
+          - vitest
+          - '@vitest/*'
+        update-types:
+          - major
+          - minor
+          - patch
+    # Other majors stay ungrouped on purpose: a toolchain major usually needs
+    # a config migration, and it should be reviewable and revertable alone.
+    ignore:
+      # TypeScript 7 is the native compiler and does not ship the TypeScript
+      # JavaScript API. tsup's declaration build needs that API, so the major
+      # cannot be taken until the declaration build no longer does.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+      # The types have to match the oldest supported runtime, which `engines`
+      # puts at Node 20, not the newest one released.
+      - dependency-name: '@types/node'
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
